@@ -10,7 +10,7 @@
 
 #define PLUGIN "Zephyr-G Swoop"
 #define VERSION "1.5A"
-#define AUTHOR "Made In Tibet"
+#define AUTHOR "GlobalModders.net"
 
 #define VEHICLE_BASESPEED 400.0
 #define VEHICLE_MAXSPEED 650.0
