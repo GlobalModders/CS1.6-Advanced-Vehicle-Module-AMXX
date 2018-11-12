@@ -9,8 +9,8 @@
 #include <xs>
 
 #define PLUGIN "Zephyr-G Swoop"
-#define VERSION "1.0"
-#define AUTHOR "GlobalModders.net"
+#define VERSION "1.5A"
+#define AUTHOR "Made In Tibet"
 
 #define VEHICLE_BASESPEED 400.0
 #define VEHICLE_MAXSPEED 650.0
@@ -19,13 +19,16 @@
 #define MODEL_VEHICLE "models/swooper.mdl"
 #define MODEL_ANIMATION "models/Anim_Riding.mdl"
 
-new const VehicleSounds[5][] = 
+new const VehicleSounds[8][] = 
 {
 	"Vehicle/VehicleIdle.wav",
 	"Vehicle/VehicleStart.wav",
 	"Vehicle/VehicleLoop.wav",
 	"Vehicle/VehicleLoopBoost.wav",
-	"Vehicle/VehicleStop.wav"
+	"Vehicle/VehicleStop.wav",
+	"Vehicle/vehicle_hit_light.wav",
+	"Vehicle/vehicle_hit_medium.wav",
+	"Vehicle/vehicle_hit_heavy.wav"
 }
 
 // Camera
@@ -53,10 +56,18 @@ const OFFSET_CSDEATHS = 444
 const OFFSET_WEAPONOWNER = 41
 const OFFSET_LINUX_WEAPONS = 4 // weapon offsets are only 4 steps higher on Linux			
 			
+#define MAX_VEHICLE_SPAWNS 128
+
+new const VEHICLE_SPAWNS_URL[] = "%s/vehicle_sp/%s.ini";
+new Float:g_VehicleSpawns[MAX_VEHICLE_SPAWNS][3], Float:g_VehicleAngles[MAX_VEHICLE_SPAWNS][3], g_VehicleSpawns_Count;
+			
 // Vars
 new g_AnimEnt[33], g_AvtEnt[33], g_Controlled[33], g_MoveEnt[33], g_SpeedBoost[33], g_SprId_LaserBeam
 new Float:g_DroppingSpeed[33], Float:g_VehicleSpeed[33], Float:SoundDelay[33], g_Fire_SprID, 
 Float:SoundEnd[33], Float:SoundRun[33], Float:g_ButtonDelay[33], Float:g_FireDelay[33]
+new Float:CurrentSpeed[33];
+new g_MDLID_Metal, Float:LastJump[33], g_Jumping[33], Float:g_JumpVel[33], Float:CheckTargetDamage[33];
+new g_MaxPlayers;
 
 public plugin_init() 
 {
@@ -66,6 +77,7 @@ public plugin_init()
 	
 	for (new i = 1; i < sizeof WEAPONENTNAMES; i++)
 		if (WEAPONENTNAMES[i][0]) RegisterHam(Ham_Item_Deploy, WEAPONENTNAMES[i], "fw_Item_Deploy_Post", 1)
+	g_MaxPlayers = get_maxplayers();
 	
 	register_clcmd("say /get", "Test")
 }
@@ -82,7 +94,13 @@ public plugin_precache()
 		
 	g_Fire_SprID = precache_model("sprites/fire_cannon.spr")
 	g_SprId_LaserBeam = engfunc(EngFunc_PrecacheModel, "sprites/laserbeam.spr")
+	g_MDLID_Metal = precache_model("models/metalplategibs.mdl");
 }
+
+public plugin_cfg() {
+	Load_VehicleSpawns();
+}
+
 // Them code len them` nhu trong zombie giant
 public Test(id)
 {
@@ -97,6 +115,17 @@ public Test(id)
 	//Angles[2] = 0.0
 	
 	Vehicle_Create(Origin, Angles)
+	
+	
+	Origin[0] = -150.039764
+	Origin[1] = -1797.813964
+	Origin[2] = -284.0
+	
+	//Angles[0] = 10.0
+	Angles[1] = 90.0
+	//Angles[2] = 0.0
+	
+	
 }
 
 public Event_NewRound()
@@ -107,6 +136,18 @@ public Event_NewRound()
 			continue
 			
 		Vehicle_Reset(i)
+		if(pev_valid(g_MyCamera[i])) {
+			remove_entity(g_MyCamera[i])
+			g_MyCamera[i] = 0;
+		}
+	}
+	
+	remove_entity_name(CAMERA_CLASSNAME);
+	remove_entity_name(VEHICLE_CLASSNAME);
+	
+	// Scan the damn and create vehicle
+	for(new i = 0; i < g_VehicleSpawns_Count; i++) {
+		Vehicle_Create(g_VehicleSpawns[i], g_VehicleAngles[i]);
 	}
 }
 
@@ -188,7 +229,21 @@ public client_PreThink(id)
 		}
 		
 		static Float:Vel[3]; pev(g_MoveEnt[id], pev_velocity, Vel)
-		client_print(id, print_center, "Current Speed: %i", floatround(vector_length(Vel) / 1.89))
+		static Float:Speed; Speed = vector_length(Vel) / 1.89;
+		client_print(id, print_center, "Current Speed: %i", floatround(Speed))
+			
+		if(Speed <= CurrentSpeed[id] - 50) {
+			static Float:ImpactSpeed = 0.0;ImpactSpeed = CurrentSpeed[id] - Speed;
+			//Damage_OnImpact(id, ImpactSpeed);
+		} else {
+		}
+		
+		if(get_gametime() - 0.1 > CheckTargetDamage[id]) {
+			Check_TargetDamage(id, g_Controlled[id], Speed);
+			CheckTargetDamage[id] = get_gametime();
+		}
+		
+		CurrentSpeed[id] = Speed;
 			
 		if(Button & IN_FORWARD)
 		{
@@ -266,15 +321,20 @@ public client_PreThink(id)
 				}
 			}
 			
+			new Jump = 0;
+			if(Button & IN_JUMP) {
+				Jump = 1;
+			}
+			
 			if((Button & IN_MOVELEFT) && (Button & IN_MOVERIGHT))
 			{
-				Vehicle_Move(id, g_MoveEnt[id], 1, 0)
+				Vehicle_Move(id, g_MoveEnt[id], 1, 0, Jump)
 			} else if(Button & IN_MOVELEFT) {
-				Vehicle_Move(id, g_MoveEnt[id], 1, -1)
+				Vehicle_Move(id, g_MoveEnt[id], 1, -1, Jump)
 			} else if(Button & IN_MOVERIGHT) {
-				Vehicle_Move(id, g_MoveEnt[id], 1, 1)
+				Vehicle_Move(id, g_MoveEnt[id], 1, 1, Jump)
 			} else {
-				Vehicle_Move(id, g_MoveEnt[id], 1, 0)
+				Vehicle_Move(id, g_MoveEnt[id], 1, 0, Jump)
 			}
 		} else if(Button & IN_BACK) {
 			//if(!(OldButton & IN_BACK))
@@ -289,13 +349,13 @@ public client_PreThink(id)
 			
 			if((Button & IN_MOVELEFT) && (Button & IN_MOVERIGHT))
 			{
-				Vehicle_Move(id, g_MoveEnt[id], 0, 0)
+				Vehicle_Move(id, g_MoveEnt[id], 0, 0, 0)
 			} else if(Button & IN_MOVELEFT) {
-				Vehicle_Move(id, g_MoveEnt[id], 0, -1)
+				Vehicle_Move(id, g_MoveEnt[id], 0, -1, 0)
 			} else if(Button & IN_MOVERIGHT) {
-				Vehicle_Move(id, g_MoveEnt[id], 0, 1)
+				Vehicle_Move(id, g_MoveEnt[id], 0, 1, 0)
 			} else {
-				Vehicle_Move(id, g_MoveEnt[id], 0, 0)
+				Vehicle_Move(id, g_MoveEnt[id], 0, 0, 0)
 			}
 		} else {
 			if(g_VehicleSpeed[id] > 0.0)
@@ -338,6 +398,144 @@ public client_PreThink(id)
 	}
 }
 
+public Damage_OnImpact(id, Float:speed) {
+	if(!pev_valid(g_Controlled[id]))
+		return;
+		
+	static Float:Origin[3];
+	Get_Position(g_Controlled[id], 25.0, 0.0, 3.0, Origin)
+		
+	switch(floatround(speed)) {
+		case 100..149: {
+			emit_sound(g_Controlled[id], CHAN_BODY, VehicleSounds[5], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+			ExecuteHamB(Ham_TakeDamage, id, 0, id, 10.0, DMG_CRUSH);
+		}
+		case 150..249: {
+			message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+			write_byte(TE_EXPLOSION)
+			engfunc(EngFunc_WriteCoord, Origin[0])
+			engfunc(EngFunc_WriteCoord, Origin[1])
+			engfunc(EngFunc_WriteCoord, Origin[2])
+			write_short(g_Fire_SprID)
+			write_byte(5)
+			write_byte(15)
+			write_byte(0)
+			message_end()	
+			
+			emit_sound(g_Controlled[id], CHAN_BODY, VehicleSounds[6], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+		
+			ExecuteHamB(Ham_TakeDamage, id, 0, id, 30.0, DMG_CRUSH);
+		}
+		case 250..349: {
+			emit_sound(g_Controlled[id], CHAN_BODY, VehicleSounds[6], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+		
+			message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+			write_byte(TE_EXPLOSION)
+			engfunc(EngFunc_WriteCoord, Origin[0])
+			engfunc(EngFunc_WriteCoord, Origin[1])
+			engfunc(EngFunc_WriteCoord, Origin[2])
+			write_short(g_Fire_SprID)
+			write_byte(10)
+			write_byte(15)
+			write_byte(0)
+			message_end()	
+			
+			ExecuteHamB(Ham_TakeDamage, id, 0, id, 60.0, DMG_CRUSH);
+		}
+		case 350..9999: {
+			emit_sound(g_Controlled[id], CHAN_BODY, VehicleSounds[7], VOL_NORM, ATTN_NORM, 0, PITCH_NORM);
+
+			Get_Position(g_Controlled[id], 0.0, 0.0, 3.0, Origin)
+			
+			message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+			write_byte(TE_EXPLOSION)
+			engfunc(EngFunc_WriteCoord, Origin[0])
+			engfunc(EngFunc_WriteCoord, Origin[1])
+			engfunc(EngFunc_WriteCoord, Origin[2])
+			write_short(g_Fire_SprID)
+			write_byte(25)
+			write_byte(15)
+			write_byte(0)
+			message_end()	
+			
+			static Ent; Ent = g_Controlled[id];
+			//Vehicle_GetDown(id, g_Controlled[id]);
+			
+			message_begin(MSG_BROADCAST,SVC_TEMPENTITY)
+			write_byte(TE_MODEL)
+			engfunc(EngFunc_WriteCoord, Origin[0])
+			engfunc(EngFunc_WriteCoord, Origin[1])
+			engfunc(EngFunc_WriteCoord, Origin[2])
+			engfunc(EngFunc_WriteCoord, Origin[0] + random_float(300.0, 500.0))
+			engfunc(EngFunc_WriteCoord, Origin[1] + random_float(300.0, 500.0))
+			engfunc(EngFunc_WriteCoord, Origin[2] + random_float(300.0, 500.0))
+			write_angle(random_num(0,360))
+			write_short(g_MDLID_Metal)
+			write_byte(1) // bounce
+			write_byte(100) // life
+			message_end()
+			
+			message_begin(MSG_BROADCAST,SVC_TEMPENTITY)
+			write_byte(TE_MODEL)
+			engfunc(EngFunc_WriteCoord, Origin[0])
+			engfunc(EngFunc_WriteCoord, Origin[1])
+			engfunc(EngFunc_WriteCoord, Origin[2])
+			engfunc(EngFunc_WriteCoord, Origin[0] + random_float(300.0, 500.0))
+			engfunc(EngFunc_WriteCoord, Origin[1] + random_float(300.0, 500.0))
+			engfunc(EngFunc_WriteCoord, Origin[2] + random_float(300.0, 500.0))
+			write_angle(random_num(0,360))
+			write_short(g_MDLID_Metal)
+			write_byte(1) // bounce
+			write_byte(100) // life
+			message_end()
+			
+			// Remove the damn car
+			set_pev(Ent, pev_iuser1, 0)
+			set_pev(Ent, pev_solid, SOLID_BBOX)
+			set_pev(g_MoveEnt[id], pev_solid, SOLID_NOT)
+		
+			set_entity_visibility(g_AvtEnt[id], 0)
+			set_entity_visibility(Ent, 0)
+		
+			remove_entity(Ent);
+			//g_Controlled[id] = 0;
+			
+			ExecuteHamB(Ham_TakeDamage, id, 0, id, 99999.0, DMG_CRUSH);
+		}
+	}
+}
+
+public Check_TargetDamage(id, Ent, Float:Speed) {
+	if(Speed <= 50.0)
+		return;
+		
+	static Float:Origin[3], Float:YourPos[3];
+	
+	Get_Position(Ent, 100.0, 0.0, 3.0, Origin)
+
+	for(new i = 0; i < g_MaxPlayers; i++) {
+		if(!is_user_alive(i))
+			continue;
+		
+		pev(i, pev_origin, YourPos);
+		if(get_distance_f(Origin, YourPos) <= 68.0)
+		{
+			ExecuteHamB(Ham_TakeDamage, i, 0, id, Speed, DMG_CRUSH);
+		}
+	}
+	/*
+	message_begin(MSG_BROADCAST, SVC_TEMPENTITY)
+	write_byte(TE_EXPLOSION)
+	engfunc(EngFunc_WriteCoord, Origin[0])
+	engfunc(EngFunc_WriteCoord, Origin[1])
+	engfunc(EngFunc_WriteCoord, Origin[2])
+	write_short(g_Fire_SprID)
+	write_byte(2)
+	write_byte(60)
+	write_byte(TE_EXPLFLAG_NODLIGHTS | TE_EXPLFLAG_NOSOUND | TE_EXPLFLAG_NOPARTICLES)
+	message_end()	*/
+}
+
 public Create_Fire(Ent)
 {
 	static Float:Origin[3], Float:Origin2[3]
@@ -368,7 +566,7 @@ public Create_Fire(Ent)
 	message_end()	
 }
 
-public Vehicle_Move(id, Ent, Forward, Side)
+public Vehicle_Move(id, Ent, Forward, Side, Jump)
 {
 	static Float:Origin[3], Float:Target[3], Float:Vel[3], Float:Angles[3]
 	static Float:Speed, Float:CurVel[3]
@@ -383,15 +581,35 @@ public Vehicle_Move(id, Ent, Forward, Side)
 		Get_Position(Ent, 48.0, 0.0, 0.0, Target)
 		Get_SpeedVector(Origin, Target, Speed, Vel)
 		
-		if(!(pev(Ent, pev_flags) & FL_ONGROUND))
-		{
-			if(g_DroppingSpeed[id] < VEHICLE_MAXSPEED)
-				g_DroppingSpeed[id] += 4.0
-			
-			Vel[2] = -g_DroppingSpeed[id]
+	
+		if(g_Jumping[id]) {
+			if(g_JumpVel[id] > 0.0) {
+				g_JumpVel[id] -= 10.0;
+				Vel[2] += 500.0;
+			} else {
+				g_Jumping[id] = 0;
+			}
 		} else {
-			g_DroppingSpeed[id] = 0.0
 			Vel[2] = CurVel[2]
+			if(!(pev(Ent, pev_flags) & FL_ONGROUND))
+			{
+				if(g_DroppingSpeed[id] < VEHICLE_MAXSPEED)
+					g_DroppingSpeed[id] += 90.0
+				
+				Vel[2] = -g_DroppingSpeed[id]
+			} else {
+				g_DroppingSpeed[id] = 0.0
+				//Vel[2] = CurVel[2]
+			}
+		}
+		
+		if(Jump) {
+			if(get_gametime() - 2.0 > LastJump[id]) {
+				g_Jumping[id] = true;
+				g_JumpVel[id] = 300.0;
+				
+				LastJump[id] = get_gametime();
+			}
 		}
 		
 		set_pev(Ent, pev_velocity, Vel)
@@ -406,6 +624,8 @@ public Vehicle_Move(id, Ent, Forward, Side)
 		
 		if(!(pev(Ent, pev_flags) & FL_ONGROUND))
 		Turn = 0.25;
+		
+		
 		
 		if(Side == -1) // Left
 		{
@@ -577,23 +797,32 @@ public Vehicle_GetDown(id, Ent)
 	static Float:Vel[3]; set_pev(Ent, pev_velocity, Vel)
 	
 	View_Camera(id, 1)
+	CurrentSpeed[id] = 0.0;
 }
 
 public Vehicle_Reset(id)
 {
+	CurrentSpeed[id] = 0.0;	
 	if(pev_valid(g_Controlled[id]))
 	{
 		static Ent; Ent = g_Controlled[id];
-		
-		g_Controlled[id] = 0;
 		
 		set_pev(Ent, pev_iuser1, 0)
 		set_pev(Ent, pev_solid, SOLID_BBOX)
 		set_pev(g_MoveEnt[id], pev_solid, SOLID_NOT)
 	
 		set_entity_visibility(g_AvtEnt[id], 0)
-		View_Camera(id, 1)
 	}
+	
+	if(pev_valid(g_MoveEnt[id])) {
+		remove_entity(g_MoveEnt[id]);
+		g_MoveEnt[id] = 0;
+	}
+	
+	g_Controlled[id] = 0;
+	View_Camera(id, 1);
+	if(is_valid_ent(g_MyCamera[id]))
+		Create_Camera(id)
 }
 	
 public Create_Camera(id)
@@ -657,9 +886,24 @@ public Vehicle_Create(Float:Origin[3], Float:Angles[3])
 	static Ent; Ent = engfunc(EngFunc_CreateNamedEntity, engfunc(EngFunc_AllocString, "info_target"))
 	if(!pev_valid(Ent)) return
 	
-	set_pev(Ent, pev_origin, Origin)
-	set_pev(Ent, pev_angles, Angles)
-	set_pev(Ent, pev_v_angle, Angles)
+	// Bugfix
+	new Float:NewAngles[3];
+	new Float:NewOrigin[3];
+	
+	NewOrigin[0] = Origin[0];
+	NewOrigin[1] = Origin[1];
+	NewOrigin[2] = Origin[2];
+	
+	NewAngles[0] = Angles[0];
+	NewAngles[1] = Angles[1];
+	NewAngles[2] = Angles[2];
+	
+	NewOrigin[2] -= 32.0;
+	NewAngles[1] += 90.0;
+	
+	set_pev(Ent, pev_origin, NewOrigin)
+	set_pev(Ent, pev_angles, NewAngles)
+	set_pev(Ent, pev_v_angle, NewAngles)
 	
 	set_pev(Ent, pev_classname, VEHICLE_CLASSNAME)
 	engfunc(EngFunc_SetModel, Ent, MODEL_VEHICLE)
@@ -677,7 +921,7 @@ public Vehicle_Create(Float:Origin[3], Float:Angles[3])
 	set_pev(Ent, pev_mins, Mins)
 	set_pev(Ent, pev_maxs, Maxs)
 	
-	drop_to_floor(Ent)
+	engfunc(EngFunc_DropToFloor, Ent);
 	entity_set_float(Ent, EV_FL_nextthink, get_gametime() + 1.5)
 }
 
@@ -793,6 +1037,90 @@ stock Get_SpeedVector(const Float:origin1[3],const Float:origin2[3],Float:speed,
 	new_velocity[1] *= (num * 2.0)
 	new_velocity[2] *= (num / 2.0)
 }  
+
+
+public Load_VehicleSpawns()
+{
+	// Check for spawns points of the current map
+	new cfgdir[32], mapname[32], filepath[100], linedata[64], point[3], angle[3];
+	get_configsdir(cfgdir, charsmax(cfgdir));
+	get_mapname(mapname, charsmax(mapname));
+	formatex(filepath, charsmax(filepath), VEHICLE_SPAWNS_URL, cfgdir, mapname);
+	
+	// check file exit
+	if (!file_exists(filepath))
+	{
+		new message[128];
+		format(message, charsmax(message), "[Event] Vehicle: Can not find spawnpoint file, therefore you can't start chicken event on this map. (%s)", filepath);
+		server_print(message);
+
+		return;
+	}
+	
+	// Load spawns points
+	new file = fopen(filepath,"rt"), row[6][6];
+	while (file && !feof(file))
+	{
+		fgets(file, linedata, charsmax(linedata));
+		
+		// invalid spawn
+		if(!linedata[0] || str_count(linedata,' ') < 2) continue;
+		
+		// get spawn point data
+		parse(linedata,row[0],5,row[1],5,row[2],5,row[3],5,row[4],5,row[5],5);
+		
+		// set spawnst
+		point[0] = str_to_num(row[0]);
+		point[1] = str_to_num(row[1]);
+		point[2] = str_to_num(row[2]);
+		angle[0] = str_to_num(row[3]);
+		angle[1] = str_to_num(row[4]);
+		angle[2] = str_to_num(row[5]);
+		
+		if (is_point(point))
+		{
+			g_VehicleSpawns[g_VehicleSpawns_Count][0] = float(point[0]);
+			g_VehicleSpawns[g_VehicleSpawns_Count][1] = float(point[1]);
+			g_VehicleSpawns[g_VehicleSpawns_Count][2] = float(point[2]);
+
+			g_VehicleAngles[g_VehicleSpawns_Count][0] = float(angle[0]);
+			g_VehicleAngles[g_VehicleSpawns_Count][1] = float(angle[1]) - 90.0;
+			g_VehicleAngles[g_VehicleSpawns_Count][2] = float(angle[2]);
+
+			// increase spawn count
+			g_VehicleSpawns_Count++;
+			if (g_VehicleSpawns_Count>=MAX_VEHICLE_SPAWNS) break;
+		}
+	}
+	if (file) fclose(file);
+	
+	// notice
+	if (g_VehicleSpawns_Count)
+	{
+		new message[128];
+		format(message, charsmax(message), "[Event] Vehicle: Loaded %i spawn point(s).", g_VehicleSpawns_Count);
+		server_print(message);
+	}
+}
+
+is_point(point[3])
+{
+	if (!point[0] && !point[1] && !point[2]) return 0;
+	return 1;
+}
+
+str_count(const str[], searchchar)
+{
+	new count, i, len = strlen(str);
+	
+	for (i = 0; i <= len; i++)
+	{
+		if(str[i] == searchchar)
+			count++;
+	}
+	
+	return count;
+}
 /* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
-*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1042\\ f0\\ fs16 \n\\ par }
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang2052\\ f0\\ fs16 \n\\ par }
 */
